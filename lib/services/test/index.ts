@@ -1,5 +1,7 @@
-import { EventType, State } from '@voiceflow/client';
-import { StreamAction as TraceStreamAction } from '@voiceflow/client/build/lib/Context/Trace';
+import { BlockTraceFrame, TraceType } from '@voiceflow/general-types';
+import { TraceFrame as ExitTraceFrame } from '@voiceflow/general-types/build/nodes/exit';
+import { TraceFrame as StreamTraceFrame, TraceStreamAction } from '@voiceflow/general-types/build/nodes/stream';
+import { EventType, State } from '@voiceflow/runtime';
 import { IntentRequest as AlexaIntentRequest } from 'ask-sdk-model';
 
 import { S, T, TEST_VERSION_ID, V } from '@/lib/constants';
@@ -19,16 +21,19 @@ const TestManager = (services: Services, config: Config, utils = utilsObj) => {
   const handlers = utils.Handlers(config);
 
   const invoke = async (state: State, request?: Request) => {
-    const { voiceflow, dataAPI } = services;
+    const { voiceflow, prototypeDataAPI } = services;
 
     const context = voiceflow.client.createContext(TEST_VERSION_ID, state as State, request, {
-      api: {
-        getProgram: dataAPI.getTestProgram,
-      },
+      api: prototypeDataAPI,
       handlers,
     });
 
-    context.setEvent(EventType.handlerWillHandle, (event) => context.trace.block(event.node.id));
+    context.setEvent(EventType.handlerWillHandle, (event) =>
+      context.trace.addTrace<BlockTraceFrame>({
+        type: TraceType.BLOCK,
+        payload: { blockID: event.node.id },
+      })
+    );
 
     context.turn.set(T.REQUEST, request);
     context.variables.set(V.TIMESTAMP, Math.floor(Date.now() / 1000));
@@ -42,10 +47,16 @@ const TestManager = (services: Services, config: Config, utils = utilsObj) => {
       switch (action) {
         case StreamAction.START:
         case StreamAction.RESUME:
-          context.trace.stream(url, token, loop ? TraceStreamAction.LOOP : TraceStreamAction.PLAY);
+          context.trace.addTrace<StreamTraceFrame>({
+            type: TraceType.STREAM,
+            payload: { src: url, token, action: loop ? TraceStreamAction.LOOP : TraceStreamAction.PLAY },
+          });
           break;
         case StreamAction.PAUSE:
-          context.trace.stream(url, token, TraceStreamAction.PAUSE);
+          context.trace.addTrace<StreamTraceFrame>({
+            type: TraceType.STREAM,
+            payload: { src: url, token, action: TraceStreamAction.PAUSE },
+          });
           break;
         default:
           break;
@@ -53,7 +64,7 @@ const TestManager = (services: Services, config: Config, utils = utilsObj) => {
     }
 
     if (context.stack.isEmpty() || context.turn.get(T.END)) {
-      context.trace.end();
+      context.trace.addTrace<ExitTraceFrame>({ type: TraceType.END });
     }
 
     return {
